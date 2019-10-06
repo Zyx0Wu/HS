@@ -163,7 +163,6 @@ def cuda_tensors(obj):
 def train(data, num_classes, network, optimizer,
           num_samples=32, batch_size=16, alpha=1.,
           eps=1e-9, cuda=False):
-    epoch_loss = 0.0
     network.train()
     N = 0
     for b, (images, labels) in enumerate(data):
@@ -183,24 +182,22 @@ def train(data, num_classes, network, optimizer,
             if cuda:
                 images = images.cuda()
                 labels_onehot = labels_onehot.cuda()
-            # run
-            optimizer.zero_grad()
-            q = network(images, labels_onehot, num_samples=num_samples)
-            # loss
-            log_weights = q.log_joint(0, 1, q.conditioned())
-            probs_sig = q['signs'].dist.probs
-            loss = (- ml(q, 0, 1, log_weights, size_average=True, reduce=True) +
-                    alpha * F.l1_loss(probs_sig, torch.zeros_like(probs_sig), reduction='mean'))
-            # step
-            loss.backward()
-            optimizer.step()
+            # closure
+            def closure():
+                # run
+                optimizer.zero_grad()
+                q = network(images, labels_onehot, num_samples=num_samples)
+                # loss
+                log_weights = q.log_joint(0, 1, q.conditioned())
+                probs_sig = q['signs'].dist.probs
+                loss = (- ml(q, 0, 1, log_weights, size_average=True, reduce=True) +
+                        alpha * F.l1_loss(probs_sig, torch.zeros_like(probs_sig), reduction='mean'))
+                # step
+                loss.backward()
+                return loss
+            optimizer.step(closure)
             network.probs.data = network.probs.data.clamp(min=0., max=1.)
-            # cuda
-            if cuda:
-                loss = loss.cpu()
-            # add
-            epoch_loss += loss.item()
-    return epoch_loss / N
+    return "Epoch train completed."
 
 def test(data, num_classes, network,
          num_samples=32, batch_size=16, alpha=1.,
@@ -268,7 +265,7 @@ def main(args):
     train_data = torch.utils.data.DataLoader(
         datasets.MNIST(DATA_PATH, train=True, download=True,
                        transform=transforms.ToTensor()),
-        batch_size=args.batch_size, shuffle=True)
+        batch_size=60000, shuffle=True)
     test_data = torch.utils.data.DataLoader(
         datasets.MNIST(DATA_PATH, train=False, download=True,
                        transform=transforms.ToTensor()),
@@ -282,17 +279,15 @@ def main(args):
         cuda_tensors(idnet)
         idnet = nn.DataParallel(idnet)
 
-    optimizer = torch.optim.Adam(list(idnet.parameters()),
-                                 lr=args.learning_rate,
-                                 betas=(args.beta1, args.beta2))
+    optimizer = torch.optim.LBFGS(list(idnet.parameters()), lr=args.learning_rate)
 
     # learn model
     if not args.restore:
         for e in range(args.num_epochs):
             train_start = time.time()
-            train_loss = train(train_data, NUM_DIGITS, idnet, optimizer,
-                               num_samples=args.num_samples, batch_size=args.batch_size, alpha=args.alpha,
-                               eps=args.epsilon, cuda=CUDA)
+            train(train_data, NUM_DIGITS, idnet, optimizer,
+                  num_samples=args.num_samples, batch_size=args.batch_size, alpha=args.alpha,
+                  eps=args.epsilon, cuda=CUDA)
             train_end = time.time()
             test_start = time.time()
             test_loss, test_accuracy = test(test_data, NUM_DIGITS, idnet,
@@ -300,8 +295,8 @@ def main(args):
                                             eps=args.epsilon, cuda=CUDA)
             test_end = time.time()
             if not args.mute:
-                print('[Epoch %d] Train: LOSS %.4e (%ds) Test: LOSS %.4e, Accuracy %0.3f (%ds)' % (
-                        e, train_loss, train_end - train_start,
+                print('[Epoch %d] Train: Completed (%ds) Test: LOSS %.4e, Accuracy %0.3f (%ds)' % (
+                        e, train_end - train_start,
                         test_loss, test_accuracy, test_end - test_start))
         if not args.no_sav:
             if not os.path.isdir(MODEL_PATH):
@@ -341,17 +336,13 @@ if __name__ == "__main__":
                         help="temperature of relaxed one-hot distribution")
     parser.add_argument('--alpha', default=.1, type=float,
                         help="relative importance of classification loss")
-    parser.add_argument('--beta1', default=0.90, type=float,
-                        help="beta1 of Adam optimizer")
-    parser.add_argument('--beta2', default=0.999, type=float,
-                        help="beta2 of Adam optimizer")
-    parser.add_argument('-e', '--num-epochs', default=1, type=int,
+    parser.add_argument('-e', '--num-epochs', default=100, type=int,
                         help="number of epochs to run")
     parser.add_argument('-s', '--num-samples', default=8, type=int,
                         help="number of samples to draw")
     parser.add_argument('-b', '--batch-size', default=32, type=int,
                         help="batch size")
-    parser.add_argument('-lr', '--learning-rate', default=1e-3, type=float,
+    parser.add_argument('-lr', '--learning-rate', default=0.5, type=float,
                         help="learning rate of the optimizer")
     parser.add_argument('-eps', '--epsilon', default=1e-9, type=float,
                         help="epsilon")
@@ -363,7 +354,7 @@ if __name__ == "__main__":
                         help="do not save model")
     parser.add_argument('--no-vis', action='store_true',
                         help="do not plot result")
-    parser.add_argument('--signature', default="alternative", type=str,
+    parser.add_argument('--signature', default="LBFGS", type=str,
                         help="signature for the outputs")
 
     args = parser.parse_args()
