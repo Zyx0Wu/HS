@@ -262,6 +262,8 @@ def main(args):
     if not os.path.isdir(DATA_PATH):
         os.makedirs(DATA_PATH)
 
+    a = datasets.MNIST(DATA_PATH, train=True, download=True,
+                       transform=transforms.ToTensor())
     train_data = torch.utils.data.DataLoader(
         datasets.MNIST(DATA_PATH, train=True, download=True,
                        transform=transforms.ToTensor()),
