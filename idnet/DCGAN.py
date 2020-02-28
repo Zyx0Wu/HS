@@ -37,6 +37,13 @@ class Generator(nn.Module):
     def __init__(self, img_size, latent_dim):
         super(Generator, self).__init__()
 
+        # first block: 1x1 2d, 3x3 2d, 5x5 2d
+        self.b1_1x1_2d = nn.Conv2d(, 128, 1, stride=1, padding=0)
+        self.b1_3x3_2d = nn.Conv2d(, 128, 3, stride=1, padding=1)
+
+
+
+
         self.init_size = img_size // 4
         self.l1 = nn.Sequential(nn.Linear(latent_dim, 128 * self.init_size ** 2))
 
