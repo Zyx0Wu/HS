@@ -64,4 +64,12 @@ for i in range(shape[-1]):
 img /= shape[-1]
 imageio.imwrite(PLOT_PATH + 'ifWT0a.png', img)
 
+
+a = [1,2]
+b = [3,4]
+a.extend(b)
+
+a = np.random.rand(100)
+b = [0, *a[0:99]]
+c = np.corrcoef(a, b)
 123

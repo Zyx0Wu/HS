@@ -33,61 +33,219 @@ def weights_init_normal(m):
         torch.nn.init.constant_(m.bias.data, 0.0)
 
 
-class Generator(nn.Module):
-    def __init__(self, img_size, latent_dim):
-        super(Generator, self).__init__()
+class Interpolate(nn.Module):
+    def __init__(self, size, mode='nearest', align_corners=False):
+        super(Interpolate, self).__init__()
+        self.interp = nn.functional.interpolate
+        self.size = size
+        self.mode = mode
+        self.align_corners = align_corners
 
-        self.init_size = img_size // 4
-        self.l1 = nn.Sequential(nn.Linear(latent_dim, 128 * self.init_size ** 2))
-
-        self.conv_blocks = nn.Sequential(
-            nn.BatchNorm2d(128),
-            nn.Upsample(scale_factor=2),
-            nn.Conv2d(128, 128, 3, stride=1, padding=1),
-            nn.BatchNorm2d(128, 0.8),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Upsample(scale_factor=2),
-            nn.Conv2d(128, 64, 3, stride=1, padding=1),
-            nn.BatchNorm2d(64, 0.8),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(64, opt.channels, 3, stride=1, padding=1),
-            nn.Tanh(),
-        )
-
-    def forward(self, z):
-        out = self.l1(z)
-        out = out.view(out.shape[0], 128, self.init_size, self.init_size)
-        img = self.conv_blocks(out)
-        return img
+    def forward(self, x):
+        x = self.interp(x, size=self.size, mode=self.mode, align_corners=self.align_corners)
+        return x
 
 
-class Discriminator(nn.Module):
-    def __init__(self):
-        super(Discriminator, self).__init__()
+class MultiscaleConv2d(nn.Module):
+    def __init__(self, in_channels, out_channels, dilation=1, groups=1, bias=True, padding_mode='zeros'):
+        super(MultiscaleConv2d, self).__init__()
+        self.Conv2dScale1 = nn.Conv2d(in_channels, out_channels, 1, stride=1, padding=0,
+                                      dilation=dilation, groups=groups, bias=bias, padding_mode=padding_mode)
+        self.Conv2dScale3 = nn.Conv2d(in_channels, out_channels, 3, stride=1, padding=1,
+                                      dilation=dilation, groups=groups, bias=bias, padding_mode=padding_mode)
+        self.Conv2dScale5 = nn.Conv2d(in_channels, out_channels, 5, stride=1, padding=2,
+                                      dilation=dilation, groups=groups, bias=bias, padding_mode=padding_mode)
 
-        def discriminator_block(in_filters, out_filters, bn=True):
-            block = [nn.Conv2d(in_filters, out_filters, 3, 2, 1), nn.LeakyReLU(0.2, inplace=True), nn.Dropout2d(0.25)]
-            if bn:
-                block.append(nn.BatchNorm2d(out_filters, 0.8))
+    def forward(self, x):
+        x1 = self.Conv2dScale1.forward(x)
+        x3 = self.Conv2dScale1.forward(x)
+        x5 = self.Conv2dScale1.forward(x)
+        x = torch.cat((x1, x3, x5), 1)
+        return x
+
+
+class Encoder(nn.Module):
+    def __init__(self, input_shape, output_shape, n_blocks=16,
+                 conv_hid_chan=64, samp_hid_chan=256, batch_norm=False):
+        super(Encoder, self).__init__()
+        self.n_blocks = n_blocks
+
+        input_size = input_shape[2, 3]
+        input_chan = input_shape[1]
+        output_size = output_shape[2, 3]
+        output_chan = output_shape[1]
+
+        def samp_unit(in_size, out_size, in_channels, out_channels):
+            times = np.int(np.log(out_size/in_size)/np.log(2))
+
+            unit = [nn.Conv2d(in_channels, out_channels, 3, stride=1, padding=1)]
+            for i in range(times):
+                unit.extend([nn.LeakyReLU(0.2, inplace=True),
+                             nn.Conv2d(out_channels, out_channels, 3, stride=2, padding=1)])
+            unit.extend([Interpolate(out_size, 'bilinear', align_corners=True),
+                         nn.LeakyReLU(0.2, inplace=True)])
+            return nn.Sequential(*unit)
+
+        def conv_block(in_filters, out_filters, reps=1, batch_norm=False):
+            block = [nn.Conv2d(in_filters, out_filters, 3, stride=1, padding=1)]
+            for i in range(reps):
+                if batch_norm:
+                    block.append(nn.BatchNorm2d(out_filters, 0.8))
+                block.extend([nn.LeakyReLU(0.2, inplace=True),
+                              nn.Conv2d(out_filters, out_filters, 3, stride=1, padding=1)])
+                if batch_norm:
+                    block.append(nn.BatchNorm2d(out_filters, 0.8))
             return block
 
-        self.model = nn.Sequential(
-            *discriminator_block(opt.channels, 16, bn=False),
-            *discriminator_block(16, 32),
-            *discriminator_block(32, 64),
-            *discriminator_block(64, 128),
-        )
+        self.samp_unit = samp_unit(input_size, output_size, input_chan, samp_hid_chan)
 
-        # The height and width of downsampled image
-        ds_size = opt.img_size // 2 ** 4
-        self.adv_layer = nn.Sequential(nn.Linear(128 * ds_size ** 2, 1), nn.Sigmoid())
+        self.conn_unit = nn.Sequential(nn.Conv2d(samp_hid_chan, conv_hid_chan, 3, stride=1, padding=1),
+                                       nn.LeakyReLU(0.2, inplace=True))
 
-    def forward(self, img):
-        out = self.model(img)
-        out = out.view(out.shape[0], -1)
-        validity = self.adv_layer(out)
+        if n_blocks > 0:
+            self.conv_blocks = nn.ModuleList()
+            for k in range(n_blocks):
+                self.conv_blocks.append(nn.Sequential(*conv_block(conv_hid_chan, conv_hid_chan,
+                                                                  reps=1, batch_norm=batch_norm)))
 
-        return validity
+        self.conc_unit = [nn.Conv2d(conv_hid_chan, conv_hid_chan, 3, stride=1, padding=1)]
+        if batch_norm:
+            self.conc_unit.append(nn.BatchNorm2d(conv_hid_chan, 0.8))
+        self.conc_unit = nn.Sequential(*self.conc_unit)
+
+        self.last_unit = nn.Sequential(nn.Conv2d(conv_hid_chan, output_chan, 1, stride=1))
+
+    def forward(self, x):
+        z = self.samp_unit.forward(x)
+        z = self.conn_unit.forward(z)
+        temp = z
+        if self.n_blocks > 0:
+            for block in self.conv_blocks:
+                z = block.forward(z) + z
+        z = self.conc_unit.forward(z) + temp
+        z = self.last_unit.forward(z)
+        return z
+
+
+class Decoder(nn.Module):
+    def __init__(self, input_shape, output_shape, n_blocks=16,
+                 conv_hid_chan=64, samp_hid_chan=256, batch_norm=False):
+        super(Decoder, self).__init__()
+        self.n_blocks = n_blocks
+
+        input_size = input_shape[2, 3]
+        input_chan = input_shape[1]
+        output_size = output_shape[2, 3]
+        output_chan = output_shape[1]
+
+        def conv_block(in_filters, out_filters, reps=1, batch_norm=False):
+            block = [nn.Conv2d(in_filters, out_filters, 3, stride=1, padding=1)]
+            for i in range(reps):
+                if batch_norm:
+                    block.append(nn.BatchNorm2d(out_filters, 0.8))
+                block.extend([nn.LeakyReLU(0.2, inplace=True),
+                              nn.Conv2d(out_filters, out_filters, 3, stride=1, padding=1)])
+                if batch_norm:
+                    block.append(nn.BatchNorm2d(out_filters, 0.8))
+            return block
+
+        def samp_unit(in_size, out_size, in_channels, out_channels):
+            times = np.int(np.log(out_size/in_size)/np.log(2))
+
+            unit = [nn.Conv2d(in_channels, out_channels, 3, stride=1, padding=1)]
+            for i in range(times):
+                unit.extend([nn.PixelShuffle(2),
+                             nn.LeakyReLU(0.2, inplace=True),
+                             nn.Conv2d(out_channels, out_channels, 3, stride=1, padding=1)])
+            unit.extend([Interpolate(out_size, 'bilinear', align_corners=True),
+                         nn.LeakyReLU(0.2, inplace=True)])
+            return nn.Sequential(*unit)
+
+        self.init_unit = nn.Sequential(nn.Conv2d(input_chan, conv_hid_chan, 3, stride=1, padding=1),
+                                       nn.LeakyReLU(0.2, inplace=True))
+
+        if n_blocks > 0:
+            self.conv_blocks = nn.ModuleList()
+            for k in range(n_blocks):
+                self.conv_blocks.append(nn.Sequential(*conv_block(conv_hid_chan, conv_hid_chan,
+                                                                  reps=1, batch_norm=batch_norm)))
+
+        self.conc_unit = [nn.Conv2d(conv_hid_chan, conv_hid_chan, 3, stride=1, padding=1)]
+        if batch_norm:
+            self.conc_unit.append(nn.BatchNorm2d(conv_hid_chan, 0.8))
+        self.conc_unit = nn.Sequential(*self.conc_unit)
+
+        self.samp_unit = samp_unit(input_size, output_size, conv_hid_chan, samp_hid_chan)
+
+        self.last_unit = nn.Sequential(nn.Conv2d(samp_hid_chan, output_chan, 1, stride=1))
+
+    def forward(self, x):
+        z = self.init_unit.forward(x)
+        temp = z
+        if self.n_blocks > 0:
+            for block in self.conv_blocks:
+                z = block.forward(z) + z
+        z = self.conc_unit.forward(z) + temp
+        z = self.samp_unit.forward(z)
+        z = self.last_unit.forward(z)
+        return z
+
+
+class Regresser(nn.Module):
+    def __init__(self, input_shape, output_shape, n_blocks=16,
+                 conv_hid_chan=64, mult_hid_chan=128, batch_norm=False):
+        super(Regresser, self).__init__()
+        self.n_blocks = n_blocks
+
+        input_size = input_shape[2, 3]
+        input_chan = input_shape[1]
+        output_size = output_shape[2, 3]
+        output_chan = output_shape[1]
+
+        def conv_block(in_filters, out_filters, reps=1, batch_norm=False):
+            block = [nn.Conv2d(in_filters, out_filters, 1, stride=1)]
+            for i in range(reps):
+                if batch_norm:
+                    block.append(nn.BatchNorm2d(out_filters, 0.8))
+                block.extend([nn.LeakyReLU(0.2, inplace=True),
+                              nn.Conv2d(out_filters, out_filters, 1, stride=1)])
+                if batch_norm:
+                    block.append(nn.BatchNorm2d(out_filters, 0.8))
+            return block
+
+        #self.aggr_unit = nn.Sequential(nn.Conv3d(1, 1, (5, 1, 1), stride=(2, 1, 1), padding=(2, 0, 0)))
+
+        self.mult_unit = nn.Sequential(MultiscaleConv2d(input_chan, mult_hid_chan),
+                                       nn.LeakyReLU(0.2, inplace=True))
+
+        self.conn_unit = nn.Sequential(nn.Conv2d(3*mult_hid_chan, conv_hid_chan,
+                                                 tuple(2*(input_size-output_size)+1), stride=1),
+                                       nn.LeakyReLU(0.2, inplace=True))
+
+        if n_blocks > 0:
+            self.conv_blocks = nn.ModuleList()
+            for k in range(n_blocks):
+                self.conv_blocks.append(nn.Sequential(*conv_block(conv_hid_chan, conv_hid_chan,
+                                                                  reps=1, batch_norm=batch_norm)))
+
+        self.conc_unit = [nn.Conv2d(conv_hid_chan, conv_hid_chan, 3, stride=1, padding=1)]
+        if batch_norm:
+            self.conc_unit.append(nn.BatchNorm2d(conv_hid_chan, 0.8))
+        self.conc_unit = nn.Sequential(*self.conc_unit)
+
+        self.last_unit = nn.Sequential(nn.Conv2d(conv_hid_chan, output_chan, 1, stride=1))
+
+    def forward(self, x):
+        z = self.mult_unit.forward(x)
+        z = self.conn_unit.forward(z)
+        temp = z
+        if self.n_blocks > 0:
+            for block in self.conv_blocks:
+                z = block.forward(z) + z
+        z = self.conc_unit.forward(z) + temp
+        z = self.last_unit.forward(z)
+
+        return z
 
 ###
 
