@@ -126,6 +126,8 @@ class Encoder(nn.Module):
         z = self.last_unit.forward(z)
         return z
 
+        self.init_size = img_size // 4
+        self.l1 = nn.Sequential(nn.Linear(latent_dim, 128 * self.init_size ** 2))
 
 class Decoder(nn.Module):
     def __init__(self, input_shape, output_shape, n_blocks=16,
