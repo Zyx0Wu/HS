@@ -18,6 +18,18 @@ import torch
 
 DATA_PATH = '../dataset/'
 PLOT_PATH = '../plot/'
+
+class Interpolate(nn.Module):
+    def __init__(self, size, mode='nearest', align_corners=False):
+        super(Interpolate, self).__init__()
+        self.interp = nn.functional.interpolate
+        self.size = size
+        self.mode = mode
+        self.align_corners = align_corners
+
+    def forward(self, x):
+        x = self.interp(x, size=self.size, mode=self.mode, align_corners=self.align_corners)
+        return x
 '''
 dataloader = torch.utils.data.DataLoader(
     datasets.MNIST(
@@ -64,6 +76,14 @@ for i in range(shape[-1]):
 img /= shape[-1]
 imageio.imwrite(PLOT_PATH + 'ifWT0a.png', img)
 
+interp1 = Interpolate([1000, 1000], 'bilinear', align_corners=True)
+interp2 = Interpolate([240, 240], 'bilinear', align_corners=True)
+
+tens1 = torch.tensor(np.array(img)[np.newaxis, np.newaxis, ...], requires_grad=False)
+img1 = interp1.forward(tens1).squeeze(0)
+
+tens2 = torch.tensor(np.moveaxis(np.array(list(f[key][:, :, :])), -1, 0)[np.newaxis, ...], requires_grad=False)
+img2 = interp2.forward(tens2).squeeze(0)
 
 a = [1,2]
 b = [3,4]
@@ -72,4 +92,5 @@ a.extend(b)
 a = np.random.rand(100)
 b = [0, *a[0:99]]
 c = np.corrcoef(a, b)
+
 123

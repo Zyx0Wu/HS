@@ -126,8 +126,6 @@ class Encoder(nn.Module):
         z = self.last_unit.forward(z)
         return z
 
-        self.init_size = img_size // 4
-        self.l1 = nn.Sequential(nn.Linear(latent_dim, 128 * self.init_size ** 2))
 
 class Decoder(nn.Module):
     def __init__(self, input_shape, output_shape, n_blocks=16,
@@ -251,13 +249,71 @@ class Regresser(nn.Module):
 
 ###
 
+def partition(data, batch_size, to_tensor=True):
+    data_size = len(data[0])
+    index = np.random.permutation(data_size)
+    n_batch = math.ceil(data_size / batch_size)
+
+    part_data = [None] * n_batch
+    for i in range(n_batch):
+        dat = [None] * len(data)
+        for j in range(len(data)):
+            dat[j] = data[j][index[i*batch_size:
+                                   min((i+1)*batch_size, data_size)]]
+            if to_tensor:
+                dat[j] = torch.tensor(dat[j], requires_grad=False)
+        part_data[i] = tuple(dat)
+    return part_data
+
 def cuda_tensors(obj):
     for attr in dir(obj):
         value = getattr(obj, attr)
         if isinstance(value, torch.Tensor):
             setattr(obj, attr, value.cuda())
 
-def train(data, num_classes, network, optimizer,
+###
+
+def train_AE(input, enc, dec, optimizer,
+          num_samples=32, batch_size=16, alpha=1.,
+          eps=1e-9, cuda=False):
+    enc.train()
+    dec.train()
+    optimizer.zero_grad()
+
+    repres = enc(input)
+    recons = dec(repres)
+
+    mse = nn.MSELoss()
+    loss = mse(recons, input)
+    loss.backward()
+    optimizer.step()
+
+    if cuda:
+        loss = loss.cpu()
+    return loss
+
+
+def train_RG(input, target, reg, enc, optimizer,
+          num_samples=32, batch_size=16, alpha=1.,
+          eps=1e-9, cuda=False):
+    reg.train()
+    enc.eval()
+
+    optimizer.zero_grad()
+    repres = reg(input)
+    dnsamp = enc(target)
+
+    mse = nn.MSELoss()
+    loss = mse(repres, dnsamp)
+    loss.backward()
+    optimizer.step()
+
+    if cuda:
+        loss = loss.cpu()
+    return loss
+
+
+def train(data, num_classes, encoder, decoder, regressor, optimizer,
           num_samples=32, batch_size=16, alpha=1.,
           eps=1e-9, cuda=False):
     epoch_loss = 0.0
