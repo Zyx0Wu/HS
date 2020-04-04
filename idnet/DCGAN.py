@@ -273,11 +273,17 @@ def cuda_tensors(obj):
 
 ###
 
-def train_AE(input, enc, dec, optimizer,
+def train_AE(input, enc, dec, optimizer, enc_mode='train', dec_mode='train',
           num_samples=32, batch_size=16, alpha=1.,
           eps=1e-9, cuda=False):
-    enc.train()
-    dec.train()
+    if enc_mode is 'train':
+        enc.train()
+    else:
+        enc.eval()
+    if dec_mode is 'train':
+        dec.train()
+    else:
+        dec.eval()
     optimizer.zero_grad()
 
     repres = enc(input)
