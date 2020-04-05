@@ -291,6 +291,8 @@ def train_AE(input, enc, dec, optimizer, enc_mode='train', dec_mode='train',
 
     mse = nn.MSELoss()
     loss = mse(recons, input)
+    reg.train()
+    enc.eval()
     loss.backward()
     optimizer.step()
 
@@ -299,11 +301,43 @@ def train_AE(input, enc, dec, optimizer, enc_mode='train', dec_mode='train',
     return loss
 
 
-def train_RG(input, target, reg, enc, optimizer,
+def train_RG(input, target, reg, enc, optimizer, reg_mode='train', enc_mode='eval',
           num_samples=32, batch_size=16, alpha=1.,
           eps=1e-9, cuda=False):
-    reg.train()
-    enc.eval()
+    if reg_mode is 'train':
+        reg.train()
+    else:
+        reg.eval()
+    if enc_mode is 'train':
+        enc.train()
+    else:
+        enc.eval()
+
+    optimizer.zero_grad()
+    repres = reg(input)
+    dnsamp = enc(target)
+
+    mse = nn.MSELoss()
+    loss = mse(repres, dnsamp)
+    loss.backward()
+    optimizer.step()
+
+    if cuda:
+        loss = loss.cpu()
+    return loss
+
+
+def train_SR(input, target, reg, enc, optimizer, reg_mode='train', enc_mode='eval',
+          num_samples=32, batch_size=16, alpha=1.,
+          eps=1e-9, cuda=False):
+    if reg_mode is 'train':
+        reg.train()
+    else:
+        reg.eval()
+    if enc_mode is 'train':
+        enc.train()
+    else:
+        enc.eval()
 
     optimizer.zero_grad()
     repres = reg(input)

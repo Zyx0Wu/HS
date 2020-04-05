@@ -4,6 +4,7 @@ import h5py
 import numpy as np
 import math
 import imageio
+from collections import OrderedDict
 
 import torchvision.transforms as transforms
 from torchvision.utils import save_image
@@ -60,7 +61,7 @@ a = unpickle(DATA_PATH + "/cifar-10-python/cifar-10-batches-py/data_batch_1")
 b = a[b'data'][0][:1024].reshape(32, -1)
 c = a[b'data'][0][1024:2048].reshape(32, -1)
 d = a[b'data'][0][2048:].reshape(32, -1)
-'''
+
 
 filename = DATA_PATH + 'hsdt/ifWT0a.hdf5'
 f = h5py.File(filename, 'r')
@@ -93,4 +94,9 @@ a = np.random.rand(100)
 b = [0, *a[0:99]]
 c = np.corrcoef(a, b)
 
+d = globals()
+'''
+a = OrderedDict({'b': 1, 'a': 2})
+b = a.keys()
+c = a.values()
 123
