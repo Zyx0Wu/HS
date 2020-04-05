@@ -13,6 +13,12 @@ def load_data(name, path, batch_size=32,
               n_cells=500):
     if not os.path.isdir(path):
         os.makedirs(path)
+
+    # HPST
+    '''
+    TODO: Load IR, IF data
+    '''
+
     # MNIST
     if name is 'MNIST':
         train_data = torch.utils.data.DataLoader(
@@ -25,6 +31,7 @@ def load_data(name, path, batch_size=32,
             batch_size=batch_size, shuffle=True)
 
         return train_data, test_data
+
     # PBMC
     elif name is 'PBMC':
         values = pd.read_csv(
@@ -44,6 +51,7 @@ def load_data(name, path, batch_size=32,
 
         return train_data, test_data
 
+    # else
     else:
         raise ValueError('Data name not recognized.')
 

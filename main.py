@@ -16,9 +16,9 @@ from model import Encoder, Decoder, Regresser
 from train import train, test
 
 # path
-DATA_PATH = '../dataset'
-MODEL_PATH = '../model/probtorch'
-PLOTS_PATH = '../plot/probtorch'
+DATA_PATH = 'dataset'
+MODEL_PATH = 'model/torch'
+PLOTS_PATH = 'plot/torch'
 
 # model parameters
 INPUT_SHAPE = [817, 400, 400]
